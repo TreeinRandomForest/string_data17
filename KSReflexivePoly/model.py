@@ -70,10 +70,13 @@ def augment_data(features, target, seed=0, n_transforms=5):
             
     augmented_features, augmented_target = np.array(augmented_features), np.array(augmented_target)
 
+    #labels for augmented (1) vs original data (0)
+    augment_labels = np.concatenate([np.zeros(len(features)), np.ones(len(augmented_features))], axis=0)
+    
     features = np.append(features, augmented_features, axis=0)
     target = np.append(target, augmented_target, axis=0)
 
-    return(features, target)
+    return(features, target, augment_labels)
 
 def flatten_data(features):
     flattened_features = []
@@ -93,7 +96,7 @@ def build_model(input_dim):
 
     return(model)
 
-def train_test_split(features, target, train_size=0.5):
+def train_test_split(features, target, augment_labels = None, train_size=0.5):
     N = len(features)
 
     indices = list(range(N))
@@ -105,20 +108,27 @@ def train_test_split(features, target, train_size=0.5):
 
     train_features, test_features = features[train_indices], features[test_indices]
     train_target, test_target = target[train_indices], target[test_indices]
-    
-    return({'train_features': train_features,
+
+    result = {'train_features': train_features,
             'train_target': train_target,
             'test_features': test_features,
             'test_target': test_target
-    })
+    }
+
+    if augment_labels is not None:
+        train_augment_labels, test_augment_labels = augment_labels[train_indices], augment_labels[test_indices]
+        result['train_augment_labels'] = train_augment_labels
+        result['test_augment_labels'] = test_augment_labels
+
+    return(result)
 
 def binarize_target(target, threshold):
     target = (target > threshold).astype(int)
 
     return target
 
-def train_model(model, train_features, train_target):
-    model.fit(train_features, train_target, epochs = 100, batch_size=64)
+def train_model(model, train_features, train_target, epochs = 100):
+    model.fit(train_features, train_target, epochs = epochs, batch_size=64)
 
     return(model)
 
@@ -126,24 +136,37 @@ if __name__ == "__main__":
     threshold = 10
     filename = "data/d3/RefPoly.d3"
     augment = False
-
-    features, target = clean_d3_data(filename, zeropad = True)
-
-    original_features = copy.copy(features)
-    original_target = copy.copy(target)
+    epochs = 20
     
+    features, target = clean_d3_data(filename, zeropad = True) #read and clean data
+
+    if augment: #permutations of vertices
+        features, target, augment_labels = augment_data(features, target, seed=0, n_transforms=5)
+
+    features = flatten_data(features) #prepare features
+    target = binarize_target(target, threshold) #prepare target
+
+    #Train test split
     if augment:
-        features, target = augment_data(features, target, seed=0, n_transforms=5)
+        d = train_test_split(features, target, augment_labels=augment_labels, train_size=0.5)
+    else:
+        d = train_test_split(features, target, augment_labels=None, train_size=0.5)
 
-    original_features = flatten_data(original_features)
-    original_target = binarize_target(original_target, threshold)
-        
-    features = flatten_data(features)
-    target = binarize_target(target, threshold)
-
-    d = train_test_split(features, target, train_size=0.5)
-
+    #build and train model
     model = build_model(len(features[0]))
-    model = train_model(model, d['train_features'], d['train_target'])
+    model = train_model(model, d['train_features'], d['train_target'], epochs = epochs)
 
-    
+    #model validation
+    train_pred = model.predict(d['train_features'])
+    test_pred = model.predict(d['test_features'])
+
+    if augment:
+        train_original_pred = train_pred[d['train_augment_labels']==0]
+        test_original_pred = test_pred[d['test_augment_labels']==0]
+
+        train_original_pred = [int(i[0] > 0.5) for i in train_original_pred]
+        test_original_pred = [int(i[0] > 0.5) for i in test_original_pred]
+        
+        train_original_target = d['train_target'][d['train_augment_labels']==0]
+        test_original_target = d['test_target'][d['test_augment_labels']==0]
+        
